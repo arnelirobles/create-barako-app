@@ -1,0 +1,63 @@
+# {{PROJECT_NAME}}
+#
+# Postgres, the barakoCMS API, and the barakoBrew console. Published images, nothing to build.
+#
+#   docker compose up -d
+#
+# Tags are pinned. barakoCMS sends X-Api-Contract-Version and moves it when the HTTP surface breaks
+# a consumer; the console declares the range it speaks and refuses to run outside it. On a moving
+# tag this project would break on somebody else's release day. Upgrade both together, deliberately.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: barakocms
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    image: ghcr.io/baryodev/barako-cms:{{API_TAG}}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${API_PORT:-{{API_PORT}}}:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ConnectionStrings__DefaultConnection: "Host=postgres;Database=barakocms;Username=postgres;Password=${DB_PASSWORD}"
+      # 32 characters minimum or the API refuses to start.
+      JWT__Key: ${JWT_KEY:?set JWT_KEY in .env}
+      InitialAdmin__Username: ${ADMIN_USERNAME:-admin}
+      InitialAdmin__Password: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD in .env}
+      # Both origins that talk to the API from a browser: this site, and the console.
+      CORS__AllowedOrigins: "http://localhost:${WEB_PORT:-{{WEB_PORT}}},http://localhost:${CONSOLE_PORT:-{{CONSOLE_PORT}}}"
+      # Off, deliberately. The demo fixture is an attendance content type with a workflow that
+      # sends mail to whatever address its Email field holds. `npm run seed` puts real content
+      # here instead. It defaults to on in the Development environment, which is the other reason
+      # this stack runs as Production.
+      Seed__DemoContent: "false"
+      Swagger__Enabled: "true"
+
+  console:
+    image: ghcr.io/baryodev/barako-admin:{{CONSOLE_TAG}}
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "${CONSOLE_PORT:-{{CONSOLE_PORT}}}:3000"
+    environment:
+      # Read by the browser, so it is the published API address, not the compose network name.
+      NEXT_PUBLIC_API_URL: http://localhost:${API_PORT:-{{API_PORT}}}
+
+volumes:
+  pgdata:

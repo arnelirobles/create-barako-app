@@ -1,0 +1,22 @@
+# Copy to .env and fill in. `create-barako-app` writes a .env with real generated values already,
+# so this file is here for the next person who clones the repository.
+
+# Postgres password for the compose stack.
+DB_PASSWORD=
+
+# 32 characters minimum or the API refuses to start.
+JWT_KEY=
+
+# Created on the API's first boot, when the user table is empty. Changing these later does nothing
+# to an existing database: use the console to change a password.
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=
+
+API_PORT=5005
+CONSOLE_PORT=3001
+WEB_PORT=3000
+
+# Where the browser reaches the API.
+NEXT_PUBLIC_CMS_URL=http://localhost:5005
+# Where the Next server reaches it. Inside compose that is the service name.
+CMS_URL=http://api:8080

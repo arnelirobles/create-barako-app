@@ -1,0 +1,14 @@
+{
+  "name": "create-barako-app",
+  "version": "0.1.0",
+  "description": "Generate a Next.js project running on barakoCMS, with docker compose, seeded content, and sign in already working.",
+  "license": "MIT",
+  "author": "Arnel Robles",
+  "type": "module",
+  "bin": { "create-barako-app": "bin/create-barako-app.mjs" },
+  "files": ["bin", "templates", "README.md", "LICENSE"],
+  "engines": { "node": ">=20" },
+  "repository": { "type": "git", "url": "git+https://github.com/arnelirobles/create-barako-app.git" },
+  "homepage": "https://github.com/arnelirobles/create-barako-app",
+  "keywords": ["barakocms", "headless-cms", "nextjs", "starter", "create-app"]
+}

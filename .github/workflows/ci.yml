@@ -1,0 +1,113 @@
+# Generates a project, brings the real stack up, seeds it, and builds the site.
+#
+# A starter is only as good as its last green run. The failure this guards against is the one that
+# costs most: somebody follows the README, it dies on step three, and they conclude the project is
+# abandoned. So this runs the same five commands the README gives, against published images.
+
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  schedule:
+    # Nightly, because the thing most likely to break this is a change somewhere else.
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+
+jobs:
+  generate-and-run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Generate a project
+        run: |
+          node bin/create-barako-app.mjs /tmp/site --yes --blueprint=blog --no-console
+          test -f /tmp/site/compose.yml
+          test -f /tmp/site/.env
+
+      - name: Refuse to generate into a directory that is not empty
+        run: |
+          mkdir -p /tmp/occupied && echo "mine" > /tmp/occupied/notes.txt
+          if node bin/create-barako-app.mjs /tmp/occupied --yes; then
+            echo "generated into a non-empty directory, which it must refuse"
+            exit 1
+          fi
+          test "$(cat /tmp/occupied/notes.txt)" = "mine"
+
+      - name: No template token survives generation
+        run: |
+          if grep -rnE '\{\{[A-Z_]+\}\}' /tmp/site; then
+            echo "unsubstituted template tokens above"
+            exit 1
+          fi
+
+      - name: Bring the stack up
+        working-directory: /tmp/site
+        run: docker compose up -d
+
+      - name: Wait for the API
+        working-directory: /tmp/site
+        run: |
+          for i in $(seq 1 60); do
+            if [ "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:5005/health)" = "200" ]; then
+              echo "healthy after ~$((i*3))s"; exit 0
+            fi
+            sleep 3
+          done
+          echo "the API never became healthy"
+          docker compose logs api | tail -50
+          exit 1
+
+      - name: Seed
+        working-directory: /tmp/site
+        run: npm run seed
+
+      - name: The seeded posts are served anonymously
+        run: |
+          count=$(curl -s "http://localhost:5005/api/public/post" | node -e \
+            "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s);console.log((j.items||j).length)})")
+          echo "published posts: $count"
+          test "$count" -ge 3
+
+      - name: Seeding twice changes nothing
+        working-directory: /tmp/site
+        run: npm run seed
+
+      - name: Install and build
+        working-directory: /tmp/site
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
+
+      - name: The home page renders a seeded post, and sign in works
+        working-directory: /tmp/site
+        run: |
+          npx next start --port 3000 &
+          for i in $(seq 1 30); do curl -s -o /dev/null http://localhost:3000/ && break; sleep 2; done
+
+          curl -s http://localhost:3000/ | grep -q "Your first post"
+
+          PASS=$(grep '^ADMIN_PASSWORD=' .env | cut -d= -f2)
+          curl -s -X POST http://localhost:3000/api/signin \
+            -d "username=admin&password=$PASS" -c /tmp/cookies.txt -o /dev/null
+
+          # Over plain http the cookie must not be Secure, or the session is dropped silently.
+          grep -q "barako_session" /tmp/cookies.txt
+          curl -s -b /tmp/cookies.txt http://localhost:3000/ | grep -q "Sign out"
+
+          # A wrong password returns to the form rather than signing anybody in.
+          code=$(curl -s -o /dev/null -w '%{redirect_url}' -X POST http://localhost:3000/api/signin \
+            -d "username=admin&password=definitely-wrong")
+          echo "$code" | grep -q "/signin?error=1"
+
+      - name: Stack logs on failure
+        if: failure()
+        working-directory: /tmp/site
+        run: docker compose logs --tail 100
