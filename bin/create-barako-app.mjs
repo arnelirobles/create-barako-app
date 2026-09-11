@@ -230,9 +230,13 @@ async function main() {
     `CONSOLE_PORT=${consolePort}`,
     `WEB_PORT=${webPort}`,
     "",
-    "# Where the browser and the Next server reach the API.",
+    "# Where the browser reaches the API.",
     `NEXT_PUBLIC_CMS_URL=http://localhost:${apiPort}`,
-    `CMS_URL=http://api:8080`,
+    "",
+    "# Where the Next server reaches it. The same address, because `npm run dev` runs this app on",
+    "# your machine and not inside the compose network. Move the site into compose as a service of",
+    "# its own and this becomes http://api:8080, the service name, which only resolves in there.",
+    `CMS_URL=http://localhost:${apiPort}`,
     "",
   ].join("\n");
   writeFileSync(join(dir, ".env"), env);
