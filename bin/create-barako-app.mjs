@@ -92,6 +92,35 @@ function render(dir, vars) {
   }
 }
 
+/*
+ * A name safe for a Docker image tag and a compose project: lowercase, and nothing but the
+ * characters a reference allows. "MySite" is a perfectly good directory name and an invalid image
+ * name, which surfaces as a build failure on the VM rather than here.
+ */
+function slug(name) {
+  return (
+    name
+      .toLowerCase()
+      .replace(/[^a-z0-9._-]+/g, "-")
+      .replace(/^[._-]+|[-._]+$/g, "") || "app"
+  );
+}
+
+/*
+ * Keeps or cuts the `# <name>` ... `# </name>` blocks in a generated file, and removes the marker
+ * lines either way. Still not a template language: a conditional step inside one YAML file cannot
+ * be a separate file the way a whole template can.
+ */
+function keepBlocks(path, decisions) {
+  if (!existsSync(path)) return;
+  let text = readFileSync(path, "utf8");
+  for (const [name, keep] of Object.entries(decisions)) {
+    const block = new RegExp(`^[ \\t]*# <${name}>\\n([\\s\\S]*?)^[ \\t]*# </${name}>\\n`, "m");
+    text = text.replace(block, keep ? "$1" : "");
+  }
+  writeFileSync(path, text);
+}
+
 /* --flag=value and --flag, so a script or a CI job never has to answer a prompt. */
 function parseFlags(args) {
   const flags = {};
@@ -193,7 +222,12 @@ async function main() {
    * tarball, so the template ships it under another name and it is restored here. Same for the
    * env example, which npm would otherwise treat as the package's own.
    */
-  for (const [from, to] of [["_gitignore", ".gitignore"], ["_env.example", ".env.example"]]) {
+  for (const [from, to] of [
+    ["_gitignore", ".gitignore"],
+    ["_env.example", ".env.example"],
+    ["_github", ".github"],
+    ["_dockerignore", ".dockerignore"],
+  ]) {
     const src = join(dir, from);
     if (existsSync(src)) renameSync(src, join(dir, to));
   }
@@ -201,6 +235,7 @@ async function main() {
   const adminPassword = secret(12);
   const vars = {
     PROJECT_NAME: name,
+    PROJECT_SLUG: slug(name),
     API_TAG,
     CONSOLE_TAG,
     CLIENT_VERSION,
@@ -209,8 +244,20 @@ async function main() {
     WEB_PORT: webPort,
     BLUEPRINT: blueprint,
     ADMIN_USER: adminUser,
+    SEED_ARGS: withSamples ? "" : " -- --schema-only",
   };
   render(dir, vars);
+
+  /*
+   * The CI workflow ships with both answers in it and the ones that do not apply are cut out. A
+   * generated project has to be green on its first push with nothing configured, and a red badge on
+   * day one is worse than no badge: checking for a seeded post in a project that seeded nothing is
+   * a workflow that fails for being honest about a choice the user made on purpose.
+   */
+  keepBlocks(join(dir, ".github", "workflows", "ci.yml"), {
+    "ci:seed": blueprint !== "none",
+    "ci:samples": blueprint !== "none" && withSamples,
+  });
 
   /*
    * The generated .env carries real secrets and is gitignored. .env.example carries the same keys

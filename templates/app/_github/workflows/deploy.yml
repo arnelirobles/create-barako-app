@@ -1,0 +1,148 @@
+# Deploys to a VM you own, over SSH, with no agent on the far side.
+#
+# It does nothing until you add the three secrets below. That is deliberate: a workflow that fails
+# on a fresh repository because it was never configured teaches people to ignore a red badge.
+#
+#   Settings > Secrets and variables > Actions
+#     DEPLOY_HOST      the VM's IP or hostname
+#     DEPLOY_USER      the SSH user, with passwordless sudo only if you set "sudo" in the manifest
+#     DEPLOY_SSH_KEY   a private key, the whole file including the BEGIN and END lines
+#
+#   Optional
+#     DEPLOY_PORT      SSH port, default 22
+#     DEPLOY_PATH      where the project lives on the VM, default /home/<DEPLOY_USER>/<project>
+#
+# One time, on the VM, before the first deploy:
+#
+#   1. Docker:      baryovm vm bootstrap <vm>     (or install it yourself)
+#   2. The config:  create <DEPLOY_PATH>/deploy/.env from deploy/env.example and fill it in.
+#      It is never synced, so a deploy cannot overwrite it, which is also why it is not created
+#      for you. The stack will not start without it.
+#
+# What a run does: sync the source, build the site image on the VM, docker compose up, then ask the
+# running site whether it renders and whether it can reach the CMS. A release that does not pass
+# that check fails, rather than reporting success over a broken site.
+
+name: deploy
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One deploy at a time, and never cancel one half way through a compose up.
+concurrency:
+  group: deploy-{{PROJECT_SLUG}}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      BARYOVM_VERSION: 0.3.0
+      # Keep baryovm's state in the workspace rather than the runner's home, so nothing it writes
+      # outlives the job.
+      BARYOVM_HOME: ${{ github.workspace }}/.baryovm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Is deployment configured
+        id: gate
+        # The secrets context is not available in a job-level `if`, so the check is a step that
+        # every later step keys off. Secrets are compared through the environment, never echoed.
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+          KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          missing=""
+          [ -n "$HOST" ] || missing="$missing DEPLOY_HOST"
+          [ -n "$USER" ] || missing="$missing DEPLOY_USER"
+          [ -n "$KEY" ] || missing="$missing DEPLOY_SSH_KEY"
+          if [ -n "$missing" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "### Deployment is not configured yet"
+              echo
+              echo "Missing secrets:$missing"
+              echo
+              echo "Add them under Settings > Secrets and variables > Actions, then re-run."
+              echo "Nothing was deployed, and this is not a failure."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      - name: Install baryovm
+        if: steps.gate.outputs.ready == 'true'
+        run: |
+          base="https://github.com/BaryoDev/BaryoVM/releases/download/v${BARYOVM_VERSION}"
+          file="baryovm_${BARYOVM_VERSION}_linux_amd64.tar.gz"
+          curl -fsSL -o "$file" "$base/$file"
+          curl -fsSL -o checksums.txt "$base/checksums.txt"
+          # A release binary that runs with your SSH key is worth checking against the published
+          # checksum rather than trusting the download.
+          sha256sum --check --ignore-missing checksums.txt
+          mkdir -p "$RUNNER_TEMP/bin"
+          tar -xzf "$file" -C "$RUNNER_TEMP/bin" baryovm
+          chmod +x "$RUNNER_TEMP/bin/baryovm"
+          rm -f "$file" checksums.txt
+          # On PATH for the steps after this one. No sudo: nothing here writes outside the runner's
+          # own temp directory.
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/bin/baryovm" version
+
+      - name: Register the VM and the stack
+        if: steps.gate.outputs.ready == 'true'
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+          KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          PORT: ${{ secrets.DEPLOY_PORT }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          umask 077
+          printf '%s\n' "$KEY" > "$RUNNER_TEMP/deploy_key"
+          chmod 600 "$RUNNER_TEMP/deploy_key"
+
+          root="${DEPLOY_PATH:-/home/$USER/{{PROJECT_SLUG}}}"
+          echo "ROOT=$root" >> "$GITHUB_ENV"
+
+          # localRoot is this checkout, and remoteRoot comes from the secrets, so the committed
+          # manifest does not have to carry either. Everything else in it is used as written.
+          jq --arg root "$root" \
+             '.localRoot = "." | .remoteRoot = $root' \
+             deploy/baryovm.release.json > "$RUNNER_TEMP/release.json"
+
+          baryovm vm add prod \
+            --host "$HOST" --user "$USER" \
+            --key "$RUNNER_TEMP/deploy_key" \
+            --port "${PORT:-22}"
+
+          baryovm stack add {{PROJECT_SLUG}} \
+            --vm prod \
+            --path "$root/deploy" \
+            --env-file .env \
+            --release-file "$RUNNER_TEMP/release.json"
+
+      - name: Release
+        if: steps.gate.outputs.ready == 'true'
+        run: baryovm stack release {{PROJECT_SLUG}}
+
+      - name: Summary
+        if: steps.gate.outputs.ready == 'true' && success()
+        run: |
+          {
+            echo "### Deployed"
+            echo
+            echo "Commit \`${GITHUB_SHA:0:8}\` is live at \`$ROOT\` on the VM, and the release"
+            echo "verified that the site renders and can reach the CMS."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove the key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/deploy_key"

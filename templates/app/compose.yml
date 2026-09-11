@@ -8,6 +8,10 @@
 # a consumer; the console declares the range it speaks and refuses to run outside it. On a moving
 # tag this project would break on somebody else's release day. Upgrade both together, deliberately.
 
+# Named so this stack is distinct from every other one on the machine, rather than being named
+# after whatever this directory happens to be called.
+name: {{PROJECT_SLUG}}
+
 services:
   postgres:
     image: postgres:16-alpine

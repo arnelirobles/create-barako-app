@@ -166,8 +166,23 @@ async function main() {
     return;
   }
 
+  /*
+   * Which slugs are already here, so a second run does not publish the samples again.
+   *
+   * A duplicate slug is not an error: content types are defined at runtime and nothing declares
+   * Slug unique, so creating the same entry twice creates it twice. That matters because this
+   * script runs again on every deploy in plenty of setups, and the second run would double the
+   * content rather than doing nothing.
+   */
+  const slugs = await existingSlugs(token);
+
   let made = 0;
+  let skipped = 0;
   for (const data of SAMPLES) {
+    if (slugs.has(data.Slug)) {
+      skipped++;
+      continue;
+    }
     const res = await api("/api/contents", {
       method: "POST",
       token,
@@ -177,12 +192,32 @@ async function main() {
     if (res.ok) {
       made++;
     } else if (res.status === 409) {
-      say(`"${data.Slug}" already exists, skipped`);
+      skipped++;
     } else {
       die(`creating "${data.Slug}" failed with ${res.status}: ${JSON.stringify(res.body)}`);
     }
   }
-  say(`${made} entries published`);
+  say(`${made} entries published${skipped ? `, ${skipped} already there` : ""}`);
+}
+
+/* Every slug stored against the post type, drafts included. Paged, because 100 is the API's cap. */
+async function existingSlugs(token) {
+  const found = new Set();
+  const size = 100;
+  for (let page = 1; ; page++) {
+    const res = await api(`/api/contents?contentType=post&page=${page}&pageSize=${size}`, { token });
+    if (!res.ok) {
+      // Not fatal. Worst case a slug is created twice, which is better than refusing to seed.
+      say(`could not list existing entries (${res.status}), creating without checking`);
+      return found;
+    }
+    const items = Array.isArray(res.body?.items) ? res.body.items : [];
+    for (const item of items) {
+      const slug = item?.data?.Slug ?? item?.slug;
+      if (typeof slug === "string" && slug) found.add(slug);
+    }
+    if (items.length < size) return found;
+  }
 }
 
 main().catch((e) => die(e?.message ?? String(e)));

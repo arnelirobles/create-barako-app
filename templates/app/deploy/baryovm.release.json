@@ -1,0 +1,26 @@
+{
+  "_comment": [
+    "How a release is put together. baryovm reads this; the deploy workflow fills in localRoot and",
+    "remoteRoot at run time from the DEPLOY_* secrets, because those two are facts about your",
+    "machine and your VM rather than anything this repository should know.",
+    "Everything else here is yours to edit."
+  ],
+  "localRoot": ".",
+  "remoteRoot": "/home/deploy/{{PROJECT_SLUG}}",
+  "sync": ["./"],
+  "exclude": [".env", ".git", ".github", "node_modules", ".next", "*.tsbuildinfo"],
+  "builds": [
+    {
+      "image": "{{PROJECT_SLUG}}-web:latest",
+      "dockerfile": "deploy/Dockerfile",
+      "context": "."
+    }
+  ],
+  "verify": [
+    "curl -fsS --max-time 10 -o /tmp/{{PROJECT_SLUG}}-verify.html http://127.0.0.1:{{WEB_PORT}}/",
+    "grep -q 'api/public/post' /tmp/{{PROJECT_SLUG}}-verify.html",
+    "if grep -q 'The API did not answer' /tmp/{{PROJECT_SLUG}}-verify.html; then echo 'the site is up but cannot reach the CMS'; exit 1; fi"
+  ],
+  "verifyAttempts": 10,
+  "verifyDelaySeconds": 4
+}

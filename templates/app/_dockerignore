@@ -1,0 +1,14 @@
+# Keeps the build context small and keeps secrets out of the image.
+#
+# node_modules matters most: without it here, `COPY . .` would drop the host's copy on top of the
+# one the build just installed, which is how an image ends up with the wrong platform's binaries.
+
+node_modules
+.next
+.git
+.github
+.env
+.env.*
+*.tsbuildinfo
+npm-debug.log*
+README.md

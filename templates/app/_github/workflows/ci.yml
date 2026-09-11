@@ -1,0 +1,183 @@
+# Runs on every push. Nothing to configure, no secrets, green on the first push.
+#
+# It builds the site twice and then runs the real stack, because a CMS-backed site has two failures
+# a typecheck cannot see: the API is unreachable, and the API answers but the page shows nothing.
+#
+# Deployment is deploy.yml, and it stays switched off until you add the secrets it names.
+
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          # setup-node fails outright when caching is on and there is no lock file, which is the
+          # state of this repository until the first `npm install` is committed. Empty disables it.
+          cache: ${{ hashFiles('package-lock.json') != '' && 'npm' || '' }}
+
+      - name: Install
+        # npm ci requires a lock file. Commit package-lock.json and this uses it, which is both
+        # faster and reproducible. Until then, install resolves them.
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --no-fund; fi
+
+      - run: npm run typecheck
+
+      - name: Build with no CMS reachable
+        # Port 1 refuses instantly. The site must still build: every page that reads the CMS has to
+        # handle the API being down, because one day it will be. A failure here is a page throwing
+        # where it should be degrading.
+        env:
+          CMS_URL: http://127.0.0.1:1
+          NEXT_PUBLIC_CMS_URL: http://127.0.0.1:1
+        run: npm run build
+
+  stack:
+    # Postgres, the API, and this site, talking to each other the way they do on your machine.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      API: http://localhost:{{API_PORT}}
+      SITE: http://localhost:{{WEB_PORT}}
+      ADMIN_PASSWORD: ci-password-not-a-secret
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: ${{ hashFiles('package-lock.json') != '' && 'npm' || '' }}
+
+      - name: Install
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --no-fund; fi
+
+      - name: Write a throwaway .env
+        # .env is gitignored and should stay that way, so CI makes its own. These values exist for
+        # the length of one job on one runner. Do not copy them anywhere that matters.
+        run: |
+          cat > .env <<'ENV'
+          DB_PASSWORD=ci-password-not-a-secret
+          JWT_KEY=ci-only-signing-key-at-least-32-characters-long
+          ADMIN_USERNAME=admin
+          ADMIN_PASSWORD=ci-password-not-a-secret
+          API_PORT={{API_PORT}}
+          CONSOLE_PORT={{CONSOLE_PORT}}
+          WEB_PORT={{WEB_PORT}}
+          NEXT_PUBLIC_CMS_URL=http://localhost:{{API_PORT}}
+          CMS_URL=http://localhost:{{API_PORT}}
+          ENV
+
+      - name: Start the stack
+        run: docker compose up -d postgres api
+
+      - name: Wait for the API
+        # The port opens before the schema has run, so this waits on /health and not on connect.
+        run: |
+          for _ in $(seq 1 60); do
+            if [ "$(curl -fsS -o /dev/null -w '%{http_code}' "$API/health" || true)" = "200" ]; then
+              echo "healthy"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "the API never became healthy"
+          docker compose logs api
+          exit 1
+
+      # <ci:seed>
+      - name: Seed
+        run: npm run seed{{SEED_ARGS}}
+
+      - name: Seeding again changes nothing
+        # The seed is safe to repeat, because it runs on every deploy in plenty of setups. If this
+        # leaves duplicates behind, the count below moves and the job fails.
+        run: |
+          count() { curl -fsS "$API/api/public/post?page=1&pageSize=100" | jq '.items | length'; }
+          before=$(count)
+          npm run seed{{SEED_ARGS}}
+          after=$(count)
+          echo "published entries: $before then $after"
+          test "$before" = "$after"
+      # </ci:seed>
+
+      - name: Serve the site
+        run: |
+          npm run build
+          npm start > server.log 2>&1 &
+          for _ in $(seq 1 40); do
+            curl -fsS -o /dev/null "$SITE/" && break
+            sleep 2
+          done
+          curl -fsS -o /dev/null "$SITE/"
+
+      - name: The site renders
+        run: |
+          # A 200 with an error banner on it is not a working page, so check for the banner too.
+          curl -fsS "$SITE/" -o home.html
+          # A marker the page always carries, rather than the project name, which is whatever
+          # somebody called a directory and would have to be quoted for the shell.
+          grep -q 'api/public/post' home.html
+          if grep -q "The API did not answer" home.html; then
+            echo "the page rendered, but it could not reach the API"
+            docker compose logs api | tail -40
+            exit 1
+          fi
+
+      # <ci:samples>
+      - name: The seeded content reaches the page
+        run: |
+          # Not just that the page renders: that content out of Postgres is on it, and that the
+          # post's own route works. This is the whole path, CMS to HTML.
+          grep -q "Your first post" home.html
+          curl -fsS "$SITE/posts/your-first-post" -o post.html
+          grep -q "Your first post" post.html
+      # </ci:samples>
+
+      - name: Sign in works, and a wrong password does not
+        run: |
+          # The right password lands on the home page with a session cookie.
+          landed=$(curl -sS -X POST "$SITE/api/signin" \
+            -d "username=admin&password=$ADMIN_PASSWORD" \
+            -c cookies.txt -o /dev/null -w '%{redirect_url}')
+          echo "signed in, redirected to: $landed"
+          case "$landed" in
+            *"/signin"*) echo "the correct password was rejected"; exit 1 ;;
+          esac
+          curl -fsS -b cookies.txt "$SITE/" | grep -q "Sign out"
+
+          # The wrong one lands back on the sign in page and sets no session.
+          wrong=$(curl -sS -X POST "$SITE/api/signin" \
+            -d "username=admin&password=definitely-not-it" \
+            -c wrong.txt -o /dev/null -w '%{redirect_url}')
+          echo "rejected, redirected to: $wrong"
+          case "$wrong" in
+            *"/signin"*) : ;;
+            *) echo "a wrong password was accepted"; exit 1 ;;
+          esac
+          if curl -fsS -b wrong.txt "$SITE/" | grep -q "Sign out"; then
+            echo "a failed sign in still produced a session"
+            exit 1
+          fi
+
+      - name: Logs, if something failed
+        if: failure()
+        run: |
+          echo "===== the site ====="
+          tail -60 server.log || true
+          echo "===== the stack ====="
+          docker compose logs --tail 100

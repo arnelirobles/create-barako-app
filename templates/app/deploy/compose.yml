@@ -1,0 +1,87 @@
+# {{PROJECT_NAME}} in production.
+#
+# This is the stack that runs on the VM. It is a separate file from the compose.yml at the root of
+# the repository, because the two are genuinely different jobs: that one brings up a CMS for the
+# site you run with `npm run dev`, and this one also runs the site.
+#
+# Two things differ and both matter. The site is a container here, built from deploy/Dockerfile, so
+# it reaches the API as `http://api:8080` over the compose network rather than through a published
+# port. And nothing here is bound to 0.0.0.0: every port is published on 127.0.0.1, so a reverse
+# proxy on the VM decides what the internet can reach. Publish a port to the world on purpose, not
+# by leaving a default alone.
+#
+# `.env` lives next to this file on the VM and is never synced, so a deploy cannot overwrite it.
+
+# Named, rather than letting compose name the project after this directory.
+#
+# Without this the project is called "deploy", because that is the folder, and every project on the
+# VM that keeps its compose file in a deploy/ directory is then the same project as far as compose
+# is concerned. Two of them share container names and share the pgdata volume: the second `up`
+# quietly recreates the first one's containers and attaches its database to the first one's data.
+# Postgres does not re-initialise a non-empty data directory, so it comes up refusing the password
+# in the .env you just wrote, which is a confusing way to find out you are pointed at somebody
+# else's database.
+name: {{PROJECT_SLUG}}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: barakocms
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    image: ghcr.io/baryodev/barako-cms:{{API_TAG}}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${API_PORT:-{{API_PORT}}}:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ConnectionStrings__DefaultConnection: "Host=postgres;Database=barakocms;Username=postgres;Password=${DB_PASSWORD}"
+      JWT__Key: ${JWT_KEY:?set JWT_KEY in .env}
+      InitialAdmin__Username: ${ADMIN_USERNAME:-admin}
+      InitialAdmin__Password: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD in .env}
+      # The public origins a browser will use, which in production are your domains and not
+      # localhost. Set PUBLIC_ORIGIN and CONSOLE_ORIGIN in .env on the VM.
+      CORS__AllowedOrigins: "${PUBLIC_ORIGIN:?set PUBLIC_ORIGIN in .env},${CONSOLE_ORIGIN:-${PUBLIC_ORIGIN}}"
+      Seed__DemoContent: "false"
+      # Off in production. Turn it on deliberately if you want the schema browsable.
+      Swagger__Enabled: "${SWAGGER_ENABLED:-false}"
+
+  web:
+    # Built on the VM by `baryovm stack release`, from the image name in baryovm.release.json.
+    image: {{PROJECT_SLUG}}-web:latest
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "127.0.0.1:${WEB_PORT:-{{WEB_PORT}}}:3000"
+    environment:
+      # The service name, reachable only inside this network. Nothing in the browser uses it.
+      CMS_URL: http://api:8080
+
+  console:
+    image: ghcr.io/baryodev/barako-admin:{{CONSOLE_TAG}}
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "127.0.0.1:${CONSOLE_PORT:-{{CONSOLE_PORT}}}:3000"
+    environment:
+      # Read by the browser, so it is the address the API is published at, through your proxy.
+      NEXT_PUBLIC_API_URL: ${API_ORIGIN:?set API_ORIGIN in .env}
+
+volumes:
+  pgdata:
