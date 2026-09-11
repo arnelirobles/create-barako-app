@@ -3,9 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev --port ${WEB_PORT:-{{WEB_PORT}}}",
+    "dev": "next dev --port {{WEB_PORT}}",
     "build": "next build",
-    "start": "next start --port ${WEB_PORT:-{{WEB_PORT}}}",
+    "start": "next start --port {{WEB_PORT}}",
     "seed": "node seed/seed.mjs",
     "typecheck": "tsc --noEmit"
   },

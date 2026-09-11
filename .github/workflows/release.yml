@@ -1,0 +1,74 @@
+# Publishes to npm on a version tag, using trusted publishing.
+#
+# No NPM_TOKEN. The runner proves who it is to npm over OIDC, npm checks that the request came from
+# this repository and this workflow file, and mints a short-lived credential itself. There is no
+# long-lived secret to leak, to rotate, or to forget to rotate.
+#
+# Provenance is generated automatically under trusted publishing, so there is no --provenance flag
+# here on purpose.
+#
+# One-time setup is in RELEASING.md, including why the very first publish cannot use this workflow.
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # the OIDC token npm verifies. Without it the publish is refused.
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Trusted publishing needs Node 22.14 or later.
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: npm new enough for trusted publishing
+        run: |
+          npm install -g npm@latest
+          npm --version
+          node -e '
+            const [maj, min, pat] = require("child_process")
+              .execSync("npm --version").toString().trim().split(".").map(Number);
+            const ok = maj > 11 || (maj === 11 && (min > 5 || (min === 5 && pat >= 1)));
+            if (!ok) { console.error("npm 11.5.1 or later is required for trusted publishing"); process.exit(1); }
+          '
+
+      - name: The tag matches the version being published
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg=$(node -p "require('./package.json').version")
+          if [ "$tag" != "$pkg" ]; then
+            echo "tag v$tag does not match package.json version $pkg"
+            exit 1
+          fi
+          echo "publishing $pkg"
+
+      # The generator is the product, so it runs before anything is published. This is the short
+      # version of the ci workflow: it proves a project comes out, not that the whole stack boots.
+      - name: The generator still generates
+        run: |
+          node bin/create-barako-app.mjs /tmp/release-check --yes --blueprint=blog --no-console
+          test -f /tmp/release-check/compose.yml
+          test -f /tmp/release-check/package.json
+          if grep -rnE '\{\{[A-Z_]+\}\}' /tmp/release-check; then
+            echo "unsubstituted template tokens above"
+            exit 1
+          fi
+
+      - name: What would go in the tarball
+        run: npm pack --dry-run
+
+      - name: Publish
+        run: npm publish --access public
