@@ -1,12 +1,14 @@
 # {{PROJECT_NAME}}
 #
-# Postgres, the barakoCMS API, and the barakoBrew console. Published images, nothing to build.
+# Postgres, the barakoCMS API, the barakoBrew console and the barakoPress renderer. Published
+# images, nothing to build.
 #
 #   docker compose up -d
 #
 # Tags are pinned. barakoCMS sends X-Api-Contract-Version and moves it when the HTTP surface breaks
 # a consumer; the console declares the range it speaks and refuses to run outside it. On a moving
-# tag this project would break on somebody else's release day. Upgrade both together, deliberately.
+# tag this project would break on somebody else's release day. Upgrade them together, deliberately,
+# the way README.md describes.
 
 # Named so this stack is distinct from every other one on the machine, rather than being named
 # after whatever this directory happens to be called.
@@ -43,7 +45,8 @@ services:
       JWT__Key: ${JWT_KEY:?set JWT_KEY in .env}
       InitialAdmin__Username: ${ADMIN_USERNAME:-admin}
       InitialAdmin__Password: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD in .env}
-      # Both origins that talk to the API from a browser: this site, and the console.
+      # The origins that call the API from a browser: this site, and the console. barakoPress
+      # calls it from its server, so it needs no entry here.
       CORS__AllowedOrigins: "http://localhost:${WEB_PORT:-{{WEB_PORT}}},http://localhost:${CONSOLE_PORT:-{{CONSOLE_PORT}}}"
       # Off, deliberately. The demo fixture is an attendance content type with a workflow that
       # sends mail to whatever address its Email field holds. `npm run seed` puts real content
@@ -53,7 +56,7 @@ services:
       Swagger__Enabled: "true"
 
   console:
-    image: ghcr.io/baryodev/barako-admin:{{CONSOLE_TAG}}
+    image: ghcr.io/baryodev/barako-brew:{{CONSOLE_TAG}}
     restart: unless-stopped
     depends_on:
       - api
@@ -62,6 +65,35 @@ services:
     environment:
       # Read by the browser, so it is the published API address, not the compose network name.
       NEXT_PUBLIC_API_URL: http://localhost:${API_PORT:-{{API_PORT}}}
+      # <with:press>
+      # Where the renderer is, so a page's Blocks field is edited as the blocks it renders.
+      NEXT_PUBLIC_PRESS_URL: http://localhost:${PRESS_PORT:-{{PRESS_PORT}}}
+      # </with:press>
+      # To serve the console under a path such as /admin instead of at the root of its port, set
+      # BARAKO_BASE_PATH: /admin here. The same image serves both.
+
+  press:
+    # The renderer. It carries no site of its own: it reads the name, theme and menus from the
+    # `site` settings entry that `npm run seed` publishes, and the posts from the public delivery
+    # API. Pages are cached and refreshed every five minutes; barakoPress's README describes the
+    # webhook that makes a publish show at once.
+    image: ghcr.io/baryodev/barako-press:{{PRESS_TAG}}
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "${PRESS_PORT:-{{PRESS_PORT}}}:3000"
+    environment:
+      # Server side, so the compose service name.
+      CMS_URL: http://api:8080
+      # The tenant a single barakoCMS install creates. On localhost no host is mapped to a tenant,
+      # so every request falls back to this one.
+      CMS_DEFAULT_TENANT: default
+      PRESS_SECRET: ${PRESS_SECRET:?set PRESS_SECRET in .env, 32 characters or more}
+      # <with:console>
+      # The console reads the block schema from here, from the browser.
+      PRESS_CONSOLE_ORIGINS: http://localhost:${CONSOLE_PORT:-{{CONSOLE_PORT}}}
+      # </with:console>
 
 volumes:
   pgdata:

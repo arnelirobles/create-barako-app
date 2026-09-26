@@ -14,6 +14,7 @@ npm run dev
 | --- | --- |
 | Site | http://localhost:{{WEB_PORT}} |
 | Console | http://localhost:{{CONSOLE_PORT}} |
+| barakoPress | http://localhost:{{PRESS_PORT}} |
 | API | http://localhost:{{API_PORT}} |
 | Swagger | http://localhost:{{API_PORT}}/swagger |
 
@@ -23,12 +24,16 @@ and is gitignored. `.env.example` is the copy to commit.
 ## What is here
 
 ```
-compose.yml        postgres, the API, the console. Pinned tags, not latest.
-seed/seed.mjs      applies the {{BLUEPRINT}} blueprint, publishes a few entries
+compose.yml        postgres, the API, the console, the renderer. Pinned tags, not latest.
+seed/seed.mjs      applies the {{BLUEPRINT}} and site blueprints, publishes the site settings and a few entries
 lib/cms.ts         the read path: public delivery, no auth
 lib/session.ts     the write path: sign in on the server, cookie to the browser
 app/               the site
 ```
+
+Two sites read the same content. The Next.js app in `app/` is yours to change. barakoPress is the
+renderer from a published image: it draws the site from the `site` settings entry and the posts, with
+no code in this repository, and its name, theme and menus are edited in the console under that entry.
 
 ## The three things worth knowing
 
@@ -48,10 +53,30 @@ own `Secure` refresh cookie (which cannot work over plain http) is not in the wa
 
 ## Upgrading the stack
 
-The image tags in `compose.yml` are pinned together on purpose. barakoCMS publishes
-`X-Api-Contract-Version` and moves it when the HTTP surface breaks a consumer, and the console
-declares the range it speaks and refuses to run outside it. Move both tags together and read the
-release notes for the contract line.
+The image tags in `compose.yml` are pinned together on purpose: barakoCMS {{API_TAG}}, barakoBrew
+{{CONSOLE_TAG}} and barakoPress {{PRESS_TAG}}. barakoCMS publishes `X-Api-Contract-Version` and moves
+it when the HTTP surface breaks a consumer, and the console declares the range it speaks and refuses
+to run outside it. Move the tags together and read each release's notes for the contract line.
+
+Production runs barakoCMS without altering existing tables, so a release that changes one will not
+start until the database has been migrated. Check before you start the new version:
+
+```bash
+# 1. change the tags in compose.yml
+docker compose pull
+# 2. compare the database with what the new version expects; exit 0 means nothing is outstanding
+docker compose run --rm --no-deps api db-assert
+# 3. if it listed changes, apply them while the old version still runs, then check again
+docker compose run --rm --no-deps api db-apply
+docker compose run --rm --no-deps api db-assert
+# 4. start the new version
+docker compose up -d
+```
+
+A release that needs a migration also ships the SQL in barakoCMS's `migrations/<version>/`, and
+`db-patch` writes the delta to a file for you to read before anything runs. Both are described in
+barakoCMS's `docs/deploy-in-production.md` (Upgrading) and `docs/upgrading-to-4.0.md`. Back up the
+`pgdata` volume first.
 
 ## What this is not
 

@@ -75,8 +75,10 @@ jobs:
           JWT_KEY=ci-only-signing-key-at-least-32-characters-long
           ADMIN_USERNAME=admin
           ADMIN_PASSWORD=ci-password-not-a-secret
+          PRESS_SECRET=ci-only-press-secret-at-least-32-characters
           API_PORT={{API_PORT}}
           CONSOLE_PORT={{CONSOLE_PORT}}
+          PRESS_PORT={{PRESS_PORT}}
           WEB_PORT={{WEB_PORT}}
           NEXT_PUBLIC_CMS_URL=http://localhost:{{API_PORT}}
           CMS_URL=http://localhost:{{API_PORT}}

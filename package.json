@@ -1,7 +1,7 @@
 {
   "name": "create-barako-app",
-  "version": "0.1.0",
-  "description": "Generate a Next.js project running on barakoCMS, with docker compose, seeded content, and sign in already working.",
+  "version": "0.2.0",
+  "description": "Generate a Next.js project running on barakoCMS, with barakoBrew and barakoPress in docker compose, seeded content, and sign in already working.",
   "license": "MIT",
   "author": "Arnel Robles",
   "type": "module",

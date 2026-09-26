@@ -4,8 +4,8 @@ Every release after the first is a tag. No token is stored anywhere.
 
 ```bash
 # bump the version in package.json, commit it, then
-git tag v0.1.1
-git push origin v0.1.1
+git tag v0.2.0
+git push origin v0.2.0
 ```
 
 `.github/workflows/release.yml` publishes it with npm trusted publishing: the runner proves who it
@@ -61,8 +61,7 @@ After that, `npm logout` if you like. Nothing on any machine needs npm credentia
 
 ## Version numbers
 
-The generator pins the image tags it was tested against (`API_TAG` and `CONSOLE_TAG` in
+The generator pins the image tags it was tested against (`API_TAG`, `CONSOLE_TAG` and `PRESS_TAG` in
 `bin/create-barako-app.mjs`). Moving those is a release of this package, because a generated
-project is only as good as the pair of images it was proven against. When barakoCMS 4.1.0 lands it
-moves the API contract to 2, and the console version that speaks contract 2 has to move with it, in
-the same commit.
+project is only as good as the images it was proven against. When barakoCMS moves its API contract,
+the barakoBrew version that speaks the new contract moves in the same commit.
