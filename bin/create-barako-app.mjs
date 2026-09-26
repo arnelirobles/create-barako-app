@@ -304,9 +304,9 @@ async function main() {
   writeFileSync(join(dir, ".env"), env);
 
   /*
-   * A service left out is cut from compose.yml, and so is every line that names it, so the API is
-   * not told to allow an origin that nothing serves and the console is not pointed at a renderer
-   * that is not there.
+   * A service left out is cut from compose.yml, along with the lines in the other services that
+   * point at it, so the console is not told about a renderer that is not there and the renderer
+   * does not allow a console origin that nothing serves.
    */
   const compose = join(dir, "compose.yml");
   let composeText = readFileSync(compose, "utf8");
