@@ -28,7 +28,7 @@ jobs:
 
       - name: Generate a project
         run: |
-          node bin/create-barako-app.mjs /tmp/site --yes --blueprint=blog --no-console
+          node bin/create-barako-app.mjs /tmp/site --yes --blueprint=blog
           test -f /tmp/site/compose.yml
           test -f /tmp/site/.env
 
@@ -79,6 +79,30 @@ jobs:
       - name: Seeding twice changes nothing
         working-directory: /tmp/site
         run: npm run seed
+
+      - name: The API sends the contract the pinned console speaks
+        run: |
+          contract=$(curl -sI http://localhost:5005/api/public/post | tr -d '\r' | awk -F': ' 'tolower($1)=="x-api-contract-version"{print $2}')
+          echo "contract: $contract"
+          test "$contract" = "4"
+
+      - name: The console serves, pointed at the API and the renderer
+        run: |
+          curl -fsS -o /dev/null http://localhost:3001/
+          curl -fsS http://localhost:3001/env-config.js | tee /tmp/env-config.js
+          grep -q 'NEXT_PUBLIC_API_URL: "http://localhost:5005"' /tmp/env-config.js
+          grep -q 'NEXT_PUBLIC_PRESS_URL: "http://localhost:3002"' /tmp/env-config.js
+
+      - name: barakoPress renders the seeded site and a post
+        run: |
+          # Its pages are rendered on the first request after the seed, from the site entry.
+          for i in $(seq 1 30); do curl -fsS -o /dev/null http://localhost:3002/ && break; sleep 2; done
+          curl -fsS http://localhost:3002/ | grep -q "Your first post"
+          curl -fsS http://localhost:3002/blog/your-first-post | grep -q "<title>Your first post | site"
+
+      - name: The database matches what the pinned API expects
+        working-directory: /tmp/site
+        run: docker compose run --rm --no-deps api db-assert
 
       - name: Install and build
         working-directory: /tmp/site

@@ -12,8 +12,12 @@ JWT_KEY=
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=
 
+# Signs barakoPress share links and revalidate webhooks. 32 characters minimum.
+PRESS_SECRET=
+
 API_PORT=5005
 CONSOLE_PORT=3001
+PRESS_PORT=3002
 WEB_PORT=3000
 
 # Where the browser reaches the API.

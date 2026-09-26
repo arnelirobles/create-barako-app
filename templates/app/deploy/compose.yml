@@ -73,7 +73,7 @@ services:
       CMS_URL: http://api:8080
 
   console:
-    image: ghcr.io/baryodev/barako-admin:{{CONSOLE_TAG}}
+    image: ghcr.io/baryodev/barako-brew:{{CONSOLE_TAG}}
     restart: unless-stopped
     depends_on:
       - api

@@ -1,14 +1,15 @@
 #!/usr/bin/env node
 /*
- * Seeds this project's CMS: applies a content blueprint, then creates a few published entries.
+ * Seeds this project's CMS: applies a content blueprint and the `site` settings blueprint, publishes
+ * the site's settings entry, then creates a few published entries.
  *
  * Plain fetch, not the typed client, on purpose. Applying a blueprint is not part of the client's
  * surface, so this script talks HTTP for that step regardless, and doing the whole job one way is
  * easier to read than half of it through a wrapper. It is also the step most likely to be replaced
  * later by `barako apply -f`, and a small script is easier to delete than a dependency.
  *
- *   node seed/seed.mjs                 apply the blueprint and create sample entries
- *   node seed/seed.mjs --schema-only   apply the blueprint, create nothing
+ *   node seed/seed.mjs                 apply the blueprints and create sample entries
+ *   node seed/seed.mjs --schema-only   apply the blueprints and the site settings, no entries
  */
 
 import { readFileSync } from "node:fs";
@@ -39,6 +40,7 @@ const API = cfg.NEXT_PUBLIC_CMS_URL ?? "http://localhost:5005";
 const USER = cfg.ADMIN_USERNAME ?? "admin";
 const PASS = cfg.ADMIN_PASSWORD;
 const BLUEPRINT = "{{BLUEPRINT}}";
+const SITE_NAME = "{{PROJECT_NAME}}";
 
 const say = (s) => console.log(`  ${s}`);
 function die(msg) {
@@ -146,22 +148,11 @@ async function main() {
     (Array.isArray(existing.body?.items) ? existing.body.items : []).map((t) => String(t.name ?? "").toLowerCase()),
   );
 
-  if (names.has("post")) {
-    say(`blueprint "${BLUEPRINT}" already applied, leaving the schema alone`);
-  } else {
-    const applied = await api(`/api/content-types/blueprints/${BLUEPRINT}`, { method: "POST", token });
-    if (!applied.ok) {
-      die(`applying blueprint "${BLUEPRINT}" failed with ${applied.status}: ${JSON.stringify(applied.body)}`);
-    }
-    const created = applied.body?.created ?? [];
-    say(`applied "${BLUEPRINT}": ${created.map((t) => t.name).join(", ")}`);
-    const notPublic = created.filter((t) => !t.isPubliclyDeliverable).map((t) => t.name);
-    if (notPublic.length) {
-      say(`not served publicly (by design): ${notPublic.join(", ")}`);
-    }
-  }
+  if (BLUEPRINT !== "none") await applyBlueprint(BLUEPRINT, "post", names, token);
+  await applyBlueprint("site", "site", names, token);
+  await publishSiteSettings(token);
 
-  if (schemaOnly) {
+  if (BLUEPRINT === "none" || schemaOnly) {
     say("schema only, no entries created");
     return;
   }
@@ -198,6 +189,51 @@ async function main() {
     }
   }
   say(`${made} entries published${skipped ? `, ${skipped} already there` : ""}`);
+}
+
+/* Applies a blueprint unless the content type it creates is already here. */
+async function applyBlueprint(name, marker, names, token) {
+  if (names.has(marker)) {
+    say(`blueprint "${name}" already applied, leaving the schema alone`);
+    return;
+  }
+  const applied = await api(`/api/content-types/blueprints/${name}`, { method: "POST", token });
+  if (!applied.ok) {
+    die(`applying blueprint "${name}" failed with ${applied.status}: ${JSON.stringify(applied.body)}`);
+  }
+  const created = applied.body?.created ?? [];
+  say(`applied "${name}": ${created.map((t) => t.name).join(", ")}`);
+  const notPublic = created.filter((t) => !t.isPubliclyDeliverable).map((t) => t.name);
+  if (notPublic.length) {
+    say(`not served publicly (by design): ${notPublic.join(", ")}`);
+  }
+}
+
+/*
+ * The one `site` entry barakoPress renders the site from: its name and tagline to start with. It is
+ * a singleton, so an entry that exists is left as it is. Once the site is running this is edited in
+ * the console, and a seed that overwrote it would undo that on every run.
+ */
+async function publishSiteSettings(token) {
+  const found = await api("/api/contents?contentType=site&page=1&pageSize=1", { token });
+  if (found.ok && Array.isArray(found.body?.items) && found.body.items.length) {
+    say("site settings already there, leaving them alone");
+    return;
+  }
+  const res = await api("/api/contents", {
+    method: "POST",
+    token,
+    body: {
+      contentType: "site",
+      status: "Published",
+      data: {
+        Name: SITE_NAME,
+        Tagline: "A barakoCMS site",
+      },
+    },
+  });
+  if (!res.ok) die(`publishing the site settings failed with ${res.status}: ${JSON.stringify(res.body)}`);
+  say(`site settings published as "${SITE_NAME}"`);
 }
 
 /* Every slug stored against the post type, drafts included. Paged, because 100 is the API's cap. */

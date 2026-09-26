@@ -2,8 +2,8 @@
 /*
  * create-barako-app
  *
- * Generates a Next.js project with a docker compose that brings up barakoCMS and barakoBrew
- * alongside it, seeded with real content, with sign in and sign out already working.
+ * Generates a Next.js project with a docker compose that brings up barakoCMS, barakoBrew and
+ * barakoPress alongside it, seeded with real content, with sign in and sign out already working.
  *
  * No dependencies on purpose. This runs through `npm create`, which means it is downloaded and
  * executed before the user has agreed to anything, so it reads from stdin, writes files, and uses
@@ -34,10 +34,13 @@ const TEMPLATES = join(dirname(fileURLToPath(import.meta.url)), "..", "templates
  * barakoCMS publishes X-Api-Contract-Version and moves it when the HTTP surface breaks a consumer.
  * barakoBrew declares the range it speaks and refuses to run outside it. A generated project on a
  * moving tag therefore breaks on somebody else's release day, in a repository they own, with no
- * change of their own to explain it. These two are known to work together.
+ * change of their own to explain it. These three are known to work together: barakoCMS 4.4.1
+ * sends contract 4, barakoBrew 1.5.0 speaks 1 to 4, and barakoPress 0.8.0 reads the delivery API
+ * and the `site` settings entry that 4.4 serves.
  */
-const API_TAG = "4.0.1";
-const CONSOLE_TAG = "1.0.0";
+const API_TAG = "4.4.1";
+const CONSOLE_TAG = "1.5.0";
+const PRESS_TAG = "0.8.0";
 const CLIENT_VERSION = "0.3.0";
 
 const BLUEPRINTS = [
@@ -139,8 +142,10 @@ const USAGE = `
   --blueprint=<name>    ${BLUEPRINTS.map((b) => b.key).join(", ")}
   --no-samples          apply the blueprint, create no entries
   --no-console          leave barakoBrew out of docker compose
+  --no-press            leave barakoPress out of docker compose
   --api-port=<n>        default 5005
   --console-port=<n>    default 3001
+  --press-port=<n>      default 3002
   --web-port=<n>        default 3000
   --admin=<name>        default admin
 `;
@@ -208,8 +213,12 @@ async function main() {
   const withConsole = flags["no-console"]
     ? false
     : await confirm("Include the barakoBrew console in docker compose?");
+  const withPress = flags["no-press"]
+    ? false
+    : await confirm("Include the barakoPress renderer in docker compose?");
   const apiPort = flags["api-port"] || (await ask("API port", "5005"));
   const consolePort = flags["console-port"] || (withConsole ? await ask("Console port", "3001") : "3001");
+  const pressPort = flags["press-port"] || (withPress ? await ask("barakoPress port", "3002") : "3002");
   const webPort = flags["web-port"] || (await ask("Next.js port", "3000"));
   const adminUser = flags.admin || (await ask("Admin username", "admin"));
   if (rl) rl.close();
@@ -238,9 +247,11 @@ async function main() {
     PROJECT_SLUG: slug(name),
     API_TAG,
     CONSOLE_TAG,
+    PRESS_TAG,
     CLIENT_VERSION,
     API_PORT: apiPort,
     CONSOLE_PORT: consolePort,
+    PRESS_PORT: pressPort,
     WEB_PORT: webPort,
     BLUEPRINT: blueprint,
     ADMIN_USER: adminUser,
@@ -273,8 +284,12 @@ async function main() {
     `ADMIN_USERNAME=${adminUser}`,
     `ADMIN_PASSWORD=${adminPassword}`,
     "",
+    "# Signs barakoPress share links and revalidate webhooks. 32 characters minimum.",
+    `PRESS_SECRET=${secret(36)}`,
+    "",
     `API_PORT=${apiPort}`,
     `CONSOLE_PORT=${consolePort}`,
+    `PRESS_PORT=${pressPort}`,
     `WEB_PORT=${webPort}`,
     "",
     "# Where the browser reaches the API.",
@@ -288,17 +303,28 @@ async function main() {
   ].join("\n");
   writeFileSync(join(dir, ".env"), env);
 
-  if (!withConsole) {
-    const compose = join(dir, "compose.yml");
-    const text = readFileSync(compose, "utf8");
-    writeFileSync(compose, text.replace(/\n  console:[\s\S]*?(?=\n  [a-z]|\nvolumes:)/, "\n"));
+  /*
+   * A service left out is cut from compose.yml, along with the lines in the other services that
+   * point at it, so the console is not told about a renderer that is not there and the renderer
+   * does not allow a console origin that nothing serves.
+   */
+  const compose = join(dir, "compose.yml");
+  let composeText = readFileSync(compose, "utf8");
+  for (const [service, keep] of [
+    ["console", withConsole],
+    ["press", withPress],
+  ]) {
+    if (keep) continue;
+    composeText = composeText.replace(new RegExp(`\\n  ${service}:[\\s\\S]*?(?=\\n  [a-z]|\\nvolumes:)`), "\n");
   }
+  writeFileSync(compose, composeText);
+  keepBlocks(compose, { "with:console": withConsole, "with:press": withPress });
 
   const steps = [
     `cd ${target}`,
     "npm install",
     "docker compose up -d",
-    ...(blueprint === "none" ? [] : [`npm run seed${withSamples ? "" : " -- --schema-only"}`]),
+    `npm run seed${withSamples ? "" : " -- --schema-only"}`,
     "npm run dev",
   ];
 
@@ -307,6 +333,7 @@ async function main() {
   stdout.write(`\n${c.dim("Then:")}\n`);
   stdout.write(`  site       http://localhost:${webPort}\n`);
   if (withConsole) stdout.write(`  console    http://localhost:${consolePort}\n`);
+  if (withPress) stdout.write(`  press      http://localhost:${pressPort}\n`);
   stdout.write(`  API        http://localhost:${apiPort}\n`);
   stdout.write(`\n  sign in as ${c.bold(adminUser)} with the password in ${c.bold(".env")}\n\n`);
 }
